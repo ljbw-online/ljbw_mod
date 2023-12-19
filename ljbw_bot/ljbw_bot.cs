@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Collections.Concurrent;
 using Ljbw_common;
 using static Ljbw_common.Class;
+using System.Net.WebSockets;
 
 namespace Ljbw_bot
 {
@@ -16,6 +17,7 @@ namespace Ljbw_bot
         static Thread modelScriptSendThread = new(new ThreadStart(ModelScriptSend));
         static Thread modSendThread = new(new ThreadStart(ModSend));
         static Thread modRecvThread = new(new ThreadStart(ModRecv));
+        static Thread channelPointListenThread = new(new ThreadStart(ChannelPointListen));
 
         static BlockingCollection<byte[]> modelScriptSendQ = new();
         static BlockingCollection<byte[]> modSendQ = new();
@@ -30,6 +32,8 @@ namespace Ljbw_bot
             modRecvThread.Start();
 
             ConnectToChat();
+
+            channelPointListenThread.Start();
         }
 
         static Socket? modelScriptSocket;
@@ -149,6 +153,8 @@ namespace Ljbw_bot
             byte[] starting_position_request = new byte[script_to_mod_array_length];
             starting_position_request[0] = (byte)botToModMessage.starting_position;
             modSendQ.Add(starting_position_request);
+            
+            byte[] fromScriptBuffer;
 
             while (true) // this loop is for auto-reconnecting to mod
             {
@@ -171,8 +177,6 @@ namespace Ljbw_bot
 
                 while (true)
                 {
-                    byte[] fromScriptBuffer = new byte[script_to_mod_array_length];
-
                     fromScriptBuffer = modSendQ.Take();
                     byte[] sendBuffer = fromScriptBuffer[0..script_to_mod_array_length];
 
@@ -211,16 +215,17 @@ namespace Ljbw_bot
 
         static bool position_requested = false;
         static bool distance_requested = false;
+        static bool game_connected;
 
         static void ModRecv()
         {
             while (true)
             {
-                if (modSocket == null)  // modSocket no longer starts off as null
-                {
-                    Thread.Sleep(1000);
-                    continue;
-                }
+                //if (modSocket == null)  // modSocket no longer starts off as null
+                //{
+                //    Thread.Sleep(1000);
+                //    continue;
+                //}
 
                 byte[] modRecvBuffer = new byte[mod_to_script_array_length];
 
@@ -334,7 +339,8 @@ namespace Ljbw_bot
         {
             if (twitchSocket == null) { return; }
 
-            string PASS = File.ReadLines(@"C:\Users\ljbw\My Drive\Tokens\ljbw_bot_oauth_access_token.txt").First();
+            string access_token = File.ReadLines(@"C:\Users\ljbw\My Drive\Tokens\ljbw_bot_access_token.txt").First();
+            string PASS = "oauth:" + access_token;
 
             int numBytesSent = twitchSocket.Send(Encoding.ASCII.GetBytes("PASS " + PASS + "\r\n"));
             twitchSocket.Send(Encoding.ASCII.GetBytes("NICK " + "ljbw_bot" + "\r\n"));
@@ -455,10 +461,12 @@ namespace Ljbw_bot
         {
             if (twitchSocket == null) { return; } // VS appeasement
 
+            int numBytesReceived;
+
             Console.WriteLine("Initial twitch recv loop");
             while (true)
             {
-                int numBytesReceived = twitchSocket.Receive(twitchRecvBuff);
+                numBytesReceived = twitchSocket.Receive(twitchRecvBuff);
 
                 if (numBytesReceived == 0)
                 {
@@ -492,7 +500,7 @@ namespace Ljbw_bot
             Console.WriteLine("Main twitch recv loop");
             while (true)
             {
-                int numBytesReceived = 0;
+                //int numBytesReceived = 0;
                 try
                 {
                     numBytesReceived = twitchSocket.Receive(twitchRecvBuff);
@@ -688,22 +696,6 @@ namespace Ljbw_bot
                             }
                             modSendQ.Add(sendBuffer);
                         }
-                        else if (args.Length == 3)
-                        {
-                            if (args[1] == "slutty" && args[2] == "pink" && username == "space_berry")
-                            {
-                                twitchSendQ.Add("PinkMercy");
-                                sendBuffer[0] = (byte)botToModMessage.paint_colour;
-                                sendBuffer[13] = 255;
-                                sendBuffer[14] = 20;
-                                sendBuffer[15] = 147;
-                                modSendQ.Add(sendBuffer);
-                            }
-                            else if (args[1] == "slutty" && args[2] == "pink")
-                            {
-                                twitchSendQ.Add("No! PinkMercy");
-                            }
-                        }
                         else if (args.Length == 4)
                         {
                             sendBuffer[0] = (byte)botToModMessage.paint_colour;
@@ -741,7 +733,7 @@ namespace Ljbw_bot
                         modSendQ.Add(sendBuffer);
                         break;
                     case chatCommand.ip: // !ip
-                        twitchSendQ.Add("3.11.29.73");
+                        twitchSendQ.Add("Not currently on a public address");
                         break;
                     case chatCommand.lurk: // !lurk
                         twitchSendQ.Add(username + " is lurking in the depths. Thank you for lurking!");
@@ -835,7 +827,8 @@ namespace Ljbw_bot
                             else
                             {
                                 sendBuffer[0] = (byte)botToModMessage.veh;
-                                sendBuffer[13] = (byte)vehicleNum;
+                                //sendBuffer[13] = (byte)vehicleNum;
+                                BitConverter.GetBytes(vehicleNum).CopyTo(sendBuffer, 13);
                                 //Console.WriteLine($"modSend: sendBuffer.Length == {sendBuffer.Length}");
                                 //foreach (byte b in sendBuffer) { Console.Write($"{b} "); }
                                 modSendQ.Add(sendBuffer);
@@ -843,7 +836,7 @@ namespace Ljbw_bot
                         }
                         else
                         {
-                            twitchSendQ.Add(String.Join(" ", vehicleNames));
+                            //twitchSendQ.Add(String.Join(" ", vehicleNames));
                         }
                         break;
                     case chatCommand.teleport:
@@ -983,6 +976,164 @@ namespace Ljbw_bot
                 //    Thread.Sleep(10);
                 //}
             }
+        }
+
+        static async void ChannelPointListen()
+        {
+            ClientWebSocket websocket = new();
+            Uri uri = new("wss://eventsub.wss.twitch.tv/ws");
+            await websocket.ConnectAsync(uri, default);
+
+            HttpClient client = new();
+            string access_token = File.ReadLines(@"C:\Users\ljbw\My Drive\Tokens\ljbw_bot_access_token.txt").First();
+            string client_id = File.ReadLines(@"C:\Users\ljbw\My Drive\Tokens\ljbw_bot_client_id.txt").First();
+            client.DefaultRequestHeaders.Add("Authorization", "Bearer " + access_token);
+            client.DefaultRequestHeaders.Add("Client-Id", client_id);
+
+            const string new_colour_id = "90ad149d-1aad-4536-a0fd-862fb10cdbaa";
+            const string new_vehicle_id = "4a7876f0-0588-4e0b-a32f-175445252c3c";
+            const string new_area_id = "ae69f182-7832-48ee-b49b-ce7dbe973f4d";
+
+            var received_bytes = new byte[4096];
+            var result = await websocket.ReceiveAsync(received_bytes, default);
+
+            string received_string = Encoding.UTF8.GetString(received_bytes, 0, result.Count);
+            JsonDocument response_json = JsonDocument.Parse(received_string);
+            JsonElement root = response_json.RootElement;
+            string session_id = root.GetProperty("payload").GetProperty("session").GetProperty("id").ToString();
+
+            string ljbwon_id = File.ReadLines(@"C:\Users\ljbw\My Drive\Tokens\ljbwon_twitch_user_id.txt").First();
+
+            HttpRequestMessage request = new (HttpMethod.Post, "https://api.twitch.tv/helix/eventsub/subscriptions");
+
+            string request_body = "{\"type\":\"channel.channel_points_custom_reward_redemption.add\",\"version\":\"1\",\"condition\":{\"broadcaster_user_id\":\"" + ljbwon_id + "\"},\"transport\":{\"method\":\"websocket\",\"session_id\":\"" + session_id + "\"}}";
+
+            request.Content = new StringContent(request_body, Encoding.UTF8, "application/json");
+
+            // Subscribe to channel point redemption events
+            HttpResponseMessage response = await client.SendAsync(request);
+            HttpStatusCode statusCode = response.StatusCode;
+            string responseContent = await response.Content.ReadAsStringAsync();
+
+            if (response.StatusCode != HttpStatusCode.Accepted)
+            {
+                Console.WriteLine(responseContent);
+            }
+
+            // Not defined at class level because not thread-safe. Multiple Randoms created in quick succession may output identical sequences. That's fine in this context.
+            Random rng = new Random();
+
+            string message_type;
+            JsonElement payload;
+            string reward_id;
+            string redemption_id;
+            string update_redemption_status_uri = "https://api.twitch.tv/helix/channel_points/custom_rewards/redemptions?broadcaster_id=" + ljbwon_id;
+            StringContent fulfilled_request_body = new ("{\"status\":\"FULFILLED\"}", Encoding.UTF8, "application/json");
+            StringContent cancelled_request_body = new ("{\"status\":\"CANCELED\"}", Encoding.UTF8, "application/json"); // Single L in CANCELED is an Americanism
+            byte[] sendBuffer;
+            bool respond;
+            string reconnect_url;
+
+            // {"session":{"id":"AgoQqoglP0K8TI-JE77SIvUt0xIGY2VsbC1j","status":"reconnecting","connected_at":"2023-11-15T14:13:23.09581564Z","keepalive_timeout_seconds":null,
+            // "reconnect_url":"wss://cell-c.eventsub.wss.twitch.tv/ws?challenge=8ee710d1-cddd-499e-9565-58c761c2f299\u0026id=AgoQqoglP0K8TI-JE77SIvUt0xIGY2VsbC1j"}}
+
+            // Start listening for websocket events
+            while (true)
+            {
+                sendBuffer = new byte[mod_to_script_array_length];
+
+                result = await websocket.ReceiveAsync(received_bytes, default);
+                received_string = Encoding.UTF8.GetString(received_bytes, 0, result.Count);
+                response_json = JsonDocument.Parse(received_string);
+                root = response_json.RootElement;
+
+                try
+                {
+                    message_type = root.GetProperty("metadata").GetProperty("message_type").ToString();
+                }
+                catch (Exception ex) { Console.WriteLine(ex); Console.WriteLine(root); continue; }
+
+
+                if (message_type == "session_reconnect")
+                {
+                    Console.WriteLine("Reconnecting websocket");
+                    await websocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Client closed", default);
+                    reconnect_url = root.GetProperty("payload").GetProperty("session").GetProperty("reconnect_url").ToString();
+                    websocket = new();
+                    await websocket.ConnectAsync(new Uri(reconnect_url), default);
+                }
+                else if (message_type != "session_keepalive")
+                {
+                    try
+                    {
+                        payload = root.GetProperty("payload");
+                    }
+                    catch (Exception ex) { Console.WriteLine(ex); Console.WriteLine(root); continue; }
+
+                    try
+                    {
+                        reward_id = payload.GetProperty("event").GetProperty("reward").GetProperty("id").ToString();
+                    }
+                    catch (Exception ex) { Console.WriteLine(ex); Console.WriteLine(payload); continue; }
+
+                    try
+                    {
+                        redemption_id = payload.GetProperty("event").GetProperty("id").ToString();
+                    }
+                    catch (Exception ex) { Console.WriteLine(ex); Console.WriteLine(payload); continue; }
+
+                    //Console.WriteLine(payload);
+
+                    switch (reward_id)
+                    {
+                        case new_colour_id:
+                            Console.WriteLine("New Colour was redeemed!");
+                            respond = true;
+                            sendBuffer[0] = (byte)botToModMessage.paint_random;
+                            break;
+                        case new_vehicle_id:
+                            Console.WriteLine("New Vehicle was redeemed!");
+                            respond = true;
+                            sendBuffer[0] = (byte)botToModMessage.veh;
+                            sendBuffer[13] = (byte)rng.Next(vehicleNames.Length);
+                            break;
+                        case new_area_id:
+                            Console.WriteLine("New Area was redeemed!");
+                            respond = true;
+                            sendBuffer[0] = (byte)botToModMessage.new_area;
+                            break;
+                        default:
+                            Console.WriteLine(reward_id + " was redeemed");
+                            respond = false;
+                            break;
+                    }
+                    
+                    if (respond)
+                    {
+                        request = new (HttpMethod.Patch, update_redemption_status_uri + "&reward_id=" + reward_id + "&id=" + redemption_id);
+                        
+                        if (modSocket.Connected)
+                        {
+                            request.Content = fulfilled_request_body;
+                            modSendQ.Add(sendBuffer);
+                        }
+                        else
+                        {
+                            request.Content = cancelled_request_body;
+                            twitchSendQ.Add("Not currently connected to GTA");
+                        }
+                        
+                        response = await client.SendAsync(request);
+
+                        if (response.StatusCode != HttpStatusCode.OK)
+                        {
+                            Console.WriteLine(await response.Content.ReadAsStringAsync());
+                        }
+                    }
+                }
+            }
+            client.Dispose();
+            await websocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Client closed", default);
         }
     }
 }

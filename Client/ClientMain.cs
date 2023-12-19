@@ -14,6 +14,8 @@ namespace fivem_mod.Client
     {
         bool ljbwCity = true;
 
+        int playerPedId;
+
         bool autoReset, pedsRiot;
 
         // true at spawn. If they are true at declaration they each have to be declared individually.
@@ -229,6 +231,18 @@ namespace fivem_mod.Client
             EnableAllControlActions(0);
             EnableAllControlActions(1);
             EnableAllControlActions(2);
+
+            playerPedId = PlayerPedId();
+
+            starting_position = GetEntityCoords(playerPedId, false);
+
+            byte[] byteArray = new byte[13];
+            byteArray[0] = (byte)modToBotMessage.starting_position;
+            BitConverter.GetBytes(starting_position.X).CopyTo(byteArray, 1);
+            BitConverter.GetBytes(starting_position.Y).CopyTo(byteArray, 5);
+            BitConverter.GetBytes(starting_position.Z).CopyTo(byteArray, 9);
+
+            TriggerServerEvent("ljbw:byteArray", byteArray);
 
             //RegisterCommand("", new Action<int, List<object>, string>((source, args, raw) => { }), false);
 
@@ -810,10 +824,10 @@ namespace fivem_mod.Client
                     }
                     break;
                 case botToModMessage.veh:
-                    ChatMessage("[OnByteArray]", "spawning " + vehicleNames[byteArray[13]]);
+                    int vehicleNumber = BitConverter.ToInt32(byteArray, 13);
+                    ChatMessage("[OnByteArray]", "spawning " + vehicleNames[vehicleNumber]);
                     ChatMessage("[OnByteArray]", $"{byteArray[12]} {byteArray[13]} {byteArray[14]} {byteArray[15]} {byteArray[16]}");
-                    ChatMessage(sender, vehicleNames[byteArray[13]]);
-                    TriggerEvent("ljbw:setVehicleRequest", vehicleNames[byteArray[13]]);
+                    TriggerEvent("ljbw:setVehicleRequest", vehicleNames[vehicleNumber]);
                     break;
                 case botToModMessage.teleport:
                     if (byteArray[4] == 0 && byteArray[5] == 0 && byteArray[6] == 0 && byteArray[7] == 0)
@@ -894,30 +908,39 @@ namespace fivem_mod.Client
                         sendArray[0] = (byte)modToBotMessage.state;
 
                         int vehicle = GetVehiclePedIsUsing(PlayerPedId());
-                        Vector3 rel_vel = GetEntitySpeedVector(vehicle, true); // relative vel seems to be relative to pos & heading on previous game tick or something
-                        float forward_speed = rel_vel.Y;
 
-                        byte[] materials = new byte[4];
-                        for (int i = 0; i < 4; i++)
-                        {
-                            int surface_mat = GetVehicleWheelSurfaceMaterial(vehicle, i);
-                            try
-                            {
-                                materials[i] = (byte)surface_mat;
-                            }
-                            catch
-                            {
-                                ChatMessage("[action]", "material no. " + surface_mat.ToString());
-                            }
-                        }
+                        //Vector3 rel_vel = GetEntitySpeedVector(vehicle, true); // relative vel seems to be relative to pos & heading on previous game tick or something
+                        //float forward_speed = rel_vel.Y;
 
-                        BitConverter.GetBytes(forward_speed).CopyTo(sendArray, 1);
-                        materials.CopyTo(sendArray, 5);
+                        //byte[] materials = new byte[4];
+                        //for (int i = 0; i < 4; i++)
+                        //{
+                        //    int surface_mat = GetVehicleWheelSurfaceMaterial(vehicle, i);
+                        //    try
+                        //    {
+                        //        materials[i] = (byte)surface_mat;
+                        //    }
+                        //    catch
+                        //    {
+                        //        ChatMessage("[action]", "material no. " + surface_mat.ToString());
+                        //    }
+                        //}
+
+                        //BitConverter.GetBytes(forward_speed).CopyTo(sendArray, 1);
+                        //materials.CopyTo(sendArray, 5);
+
+                        float veh_heading = GetEntityHeading(vehicle);
+                        Vector3 veh_pos = GetEntityCoords(vehicle, true);
+
+                        BitConverter.GetBytes(veh_heading).CopyTo(sendArray, 1);
+                        BitConverter.GetBytes(veh_pos.X).CopyTo(sendArray, 5);
+                        BitConverter.GetBytes(veh_pos.Y).CopyTo(sendArray, 9);
+                        BitConverter.GetBytes(veh_pos.Z).CopyTo(sendArray, 13);
 
                         if (submerged)
                         {
-                            sendArray[9] = 1;
-                            submerged = false;
+                            sendArray[17] = 1;
+                            submerged = false; // Only reset submerged once we've notified the python script
                         }
 
                         TriggerServerEvent("ljbw:byteArray", sendArray);

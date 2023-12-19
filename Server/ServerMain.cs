@@ -35,7 +35,6 @@ namespace fivem_mod.Server
         public void HelloServer()
         {
             Debug.WriteLine("Sure, hello.");
-            
         }
 
         Socket chatBotSocket;
